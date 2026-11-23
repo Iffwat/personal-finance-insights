@@ -213,7 +213,7 @@ if mode == "Import New Statement" and uploaded_files:
                 os.remove(temp_path)
 
 # ── Load all data from DB ──────────────────────────────────────────────────────
-clean_df = process_transactions(load_transactions())  # Reclassify historical rows with current rules
+clean_df = load_transactions()
 
 if clean_df.empty:
     if mode == "Import New Statement":
@@ -225,6 +225,8 @@ if clean_df.empty:
         )
     st.stop()
 
+# Reclassify both newly imported and historical rows with the current rules.
+clean_df = process_transactions(clean_df)
 clean_df = clean_df.sort_values("Date")
 
 # ── Sidebar Filters (rendered after data is ready) ────────────────────────────
