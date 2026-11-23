@@ -398,7 +398,13 @@ net_remaining = (
     - total_expenses - total_external_transfer_out - total_investments
     - total_savings_in - total_other_internal_out
 )
-savings_rate = (net_system_surplus / total_income * 100) if total_income > 0 else 0.0
+# Savings rate includes investments as retained wealth, but excludes
+# movements between owned accounts. Reimbursements and third-party receipts
+# remain separate from earned income.
+savings_rate = (
+    (total_income - total_expenses - total_external_transfer_out) / total_income * 100
+    if total_income > 0 else 0.0
+)
 
 cat_summary = (
     expense_df.groupby("Category")["Amount"]
@@ -514,7 +520,7 @@ with tab2:
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Rate</div>
-            <div class="kpi-label">Savings Rate</div>
+            <div class="kpi-label">Personal Savings Rate</div>
             <div class="kpi-value {sr_class}">{savings_rate:.1f}%</div>
             <div class="kpi-sub {sr_class}">{sr_label}</div>
           </div>
@@ -1362,7 +1368,8 @@ with tab4:
         - monthly["Expense"] - monthly["TransfersOut"] - monthly["Investments"]
     )
     monthly["SavingsRate"] = (
-        monthly["Net"] / monthly["Income"].replace(0, float("nan")) * 100
+        (monthly["Income"] - monthly["Expense"] - monthly["TransfersOut"])
+        / monthly["Income"].replace(0, float("nan")) * 100
     ).fillna(0).round(1)
     monthly["Expense_Roll3"] = monthly["Expense"].rolling(3, min_periods=1).mean()
     monthly["Expense_MoM"] = monthly["Expense"].diff()
@@ -1496,7 +1503,7 @@ with tab4:
 
     with col_m2:
         st.markdown(
-            '<div class="section-header-week">Monthly Savings Rate</div>',
+            '<div class="section-header-week">Monthly Personal Savings Rate</div>',
             unsafe_allow_html=True,
         )
         sr_colors = [
@@ -1590,7 +1597,7 @@ with tab4:
         "TabungNet": "Net Tabung Movement (RM)",
         "OtherInternalNet": "Other Own-Account Movement (RM)",
         "Net": "Overall Surplus (RM)",
-        "SavingsRate": "Savings Rate (%)",
+        "SavingsRate": "Personal Savings Rate (%)",
     })
     for col in [
         "Income (RM)", "Reimbursements (RM)", "Transfers In (RM)",
@@ -1598,7 +1605,7 @@ with tab4:
         "Net Tabung Movement (RM)", "Other Own-Account Movement (RM)", "Overall Surplus (RM)"
     ]:
         display_monthly[col] = display_monthly[col].map(lambda v: f"RM {v:,.2f}")
-    display_monthly["Savings Rate (%)"] = display_monthly["Savings Rate (%)"].map(
+    display_monthly["Personal Savings Rate (%)"] = display_monthly["Savings Rate (%)"].map(
         lambda v: f"{v:.1f}%"
     )
     st.dataframe(display_monthly.set_index("Month"), use_container_width=True)
