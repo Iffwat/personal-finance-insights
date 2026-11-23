@@ -518,48 +518,81 @@ with tab2:
 
     st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
 
-    # Sankey
+    st.markdown('<div class="section-header">Future / Tabung Reconciliation</div>', unsafe_allow_html=True)
+    tabung_a, tabung_b, tabung_c = st.columns(3)
+    tabung_a.metric("Deposited into Tabung", f"RM {total_savings_in:,.2f}")
+    tabung_b.metric("Withdrawn from Tabung", f"RM {total_savings_out:,.2f}")
+    tabung_c.metric(
+        "Net Tabung Movement",
+        f"RM {net_tabung_movement:,.2f}",
+        help="Positive means more money was moved into Tabung than withdrawn. This is an internal movement, not an expense or income."
+    )
+    st.caption("Future / Tabung is your own holding account. Deposits and withdrawals are shown for visibility but are excluded from income and actual spending.")
+    if not internal_df.empty:
+        st.dataframe(
+            internal_df[["Date", "Description", "Amount", "Category"]].sort_values("Date"),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+    # Sankey: Tabung withdrawals are a funding source for the main account,
+    # not salary. Deposits are an internal allocation, not an expense.
     st.markdown(
         '<div class="section-header">Cash Flow Sankey Map</div>',
         unsafe_allow_html=True,
     )
-    nodes       = ["Your Income", "Cash Pool"]
+    nodes = ["Your Income", "Cash Pool"]
     node_colors = ["#00e396", "#775dd0"]
     srcs, tgts, vals, lcolors = [], [], [], []
 
+    def add_inflow(label, amount, color):
+        if amount > 0:
+            nodes.append(label)
+            node_colors.append(color)
+            srcs.append(len(nodes) - 1)
+            tgts.append(1)
+            vals.append(float(amount))
+            lcolors.append("rgba(0,180,216,0.35)")
+
     if total_income > 0:
         srcs.append(0); tgts.append(1)
-        vals.append(total_income); lcolors.append("rgba(0,227,150,0.35)")
+        vals.append(float(total_income)); lcolors.append("rgba(0,227,150,0.35)")
+    add_inflow("Expense Reimbursements", total_reimbursements, "#74b9ff")
+    add_inflow("Other Transfers In", total_external_transfer_in, "#74b9ff")
+    add_inflow("Tabung Withdrawal (Own Funds)", total_savings_out, "#feb019")
 
-    if total_savings_out > 0:
-        nodes.append("Saving out (Withdrawal)"); node_colors.append("#feb019")
-        srcs.append(len(nodes)-1); tgts.append(1)
-        vals.append(total_savings_out); lcolors.append("rgba(254,176,25,0.35)")
-
-    if total_expenses > (total_income + total_savings_out):
-        nodes.append("Deficit"); node_colors.append("#ff4560")
-        srcs.append(len(nodes)-1); tgts.append(1)
-        vals.append(total_expenses - (total_income + total_savings_out))
-        lcolors.append("rgba(255,69,96,0.35)")
+    # When outflows exceed inflows, show the gap as a deficit source so the
+    # Sankey remains balanced without pretending the gap is new income.
+    if net_remaining < 0:
+        nodes.append("Deficit / Opening Funds")
+        node_colors.append("#ff4560")
+        srcs.append(len(nodes) - 1); tgts.append(1)
+        vals.append(float(abs(net_remaining))); lcolors.append("rgba(255,69,96,0.35)")
 
     for i, (_, row) in enumerate(cat_summary.iterrows()):
         if row["Amount"] > 0:
             nodes.append(row["Category"])
             node_colors.append(PAL[i % len(PAL)])
-            srcs.append(1); tgts.append(len(nodes)-1)
-            vals.append(row["Amount"])
+            srcs.append(1); tgts.append(len(nodes) - 1)
+            vals.append(float(row["Amount"]))
             r, g, b = px.colors.hex_to_rgb(PAL[i % len(PAL)])
             lcolors.append(f"rgba({r},{g},{b},0.4)")
 
-    if total_savings_in > 0:
-        nodes.append("Saving in (Tabung)"); node_colors.append("#00b4d8")
-        srcs.append(1); tgts.append(len(nodes)-1)
-        vals.append(total_savings_in); lcolors.append("rgba(0,180,216,0.5)")
+    def add_outflow(label, amount, color):
+        if amount > 0:
+            nodes.append(label)
+            node_colors.append(color)
+            srcs.append(1); tgts.append(len(nodes) - 1)
+            vals.append(float(amount))
+            lcolors.append("rgba(255,255,255,0.25)")
 
+    add_outflow("Transfers to Other People", total_external_transfer_out, "#e17055")
+    add_outflow("Investments / ASB", total_investments, "#00cec9")
+    add_outflow("Moved into Tabung (Own Funds)", total_savings_in, "#00b4d8")
     if net_remaining > 0:
-        nodes.append("Net Remaining"); node_colors.append("#26de81")
-        srcs.append(1); tgts.append(len(nodes)-1)
-        vals.append(net_remaining); lcolors.append("rgba(38,222,129,0.5)")
+        add_outflow("Net Remaining in Main Account", net_remaining, "#26de81")
 
     fig_s = go.Figure(go.Sankey(
         arrangement="snap",
@@ -579,8 +612,9 @@ with tab2:
     ))
     fig_s.update_layout(
         **DARK,
-        title=dict(text="Monthly Cash Flow", font=dict(size=16, color="#c8d6e5")),
-        height=480,
+        title=dict(text="Income, spending and movement between your own accounts",
+                   font=dict(size=16, color="#c8d6e5")),
+        height=520,
     )
     st.plotly_chart(fig_s, use_container_width=True)
     st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
