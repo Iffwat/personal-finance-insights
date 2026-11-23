@@ -7,6 +7,9 @@ RULES = [
     {"keywords": ["wtdrw future", "wtdrw tabung"], "category": "Tabung Withdrawal", "type_override": "Internal Transfer"},
     {"keywords": ["fund future", "tabung future"], "category": "Savings / Tabung", "type_override": "Internal Transfer"},
     {"keywords": ["booster future"], "category": "Other Internal Transfer", "type_override": "Internal Transfer"},
+    # Maybank rows where the counterparty is the account holder's own name
+    # and the memo is a wallet/budget label are account allocations, not spend.
+
     {"keywords": ["amanah saham", "asnb transfer", "asb transfer"], "category": "Investment / ASB", "type_override": "Investment"},
     {"keywords": ["salary", "gaji", "payroll", "emolumen", "allowance", "elaun", "bonus", "dividen", "dividend", "incentive"], "category": "Salary / Income", "type_override": "Income"},
     {"keywords": ["claim"], "category": "Expense Reimbursement", "type_override": "Reimbursement"},
@@ -32,6 +35,14 @@ RULES = [
 def categorize_transaction(description: str, amount: float = 0.0):
     """Return (category, type override); internal transfers are not income/expense."""
     desc = str(description or "").lower().strip()
+    if "muhammad irsyad iff" in desc:
+        if "toll" in desc:
+            return "Toll Allocation", "Internal Transfer"
+        if "insurans" in desc or "insurance" in desc:
+            return "Insurance Allocation", "Internal Transfer"
+        if "game" in desc:
+            return "Entertainment Allocation", "Internal Transfer"
+        return "Other Internal Transfer", "Internal Transfer"
     for rule in RULES:
         if any(keyword in desc for keyword in rule["keywords"]):
             return rule["category"], rule.get("type_override")
