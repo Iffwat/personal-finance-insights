@@ -6,6 +6,7 @@ import numpy as np
 RULES = [
     {"keywords": ["wtdrw future", "wtdrw tabung"], "category": "Tabung Withdrawal", "type_override": "Internal Transfer"},
     {"keywords": ["fund future", "tabung future"], "category": "Savings / Tabung", "type_override": "Internal Transfer"},
+    {"keywords": ["booster future"], "category": "Other Internal Transfer", "type_override": "Internal Transfer"},
     {"keywords": ["amanah saham", "asnb transfer", "asb transfer"], "category": "Investment / ASB", "type_override": "Investment"},
     {"keywords": ["salary", "gaji", "payroll", "emolumen", "allowance", "elaun", "bonus", "dividen", "dividend", "incentive"], "category": "Salary / Income", "type_override": "Income"},
     {"keywords": ["claim"], "category": "Expense Reimbursement", "type_override": "Reimbursement"},
