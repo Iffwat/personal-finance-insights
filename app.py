@@ -947,7 +947,7 @@ with tab3:
 
     # ── VISUAL 1: Grouped bar — weekly income vs expense ──────────────────
     st.markdown(
-        '<div class="section-header-week">Weekly Income vs Expenses</div>',
+        '<div class="section-header-week">Weekly Income, Expenses & Net Tabung Movement</div>',
         unsafe_allow_html=True,
     )
     fig_wb = go.Figure()
@@ -1378,7 +1378,7 @@ with tab4:
     ytd_inc   = monthly["Income"].sum()
     ytd_exp   = monthly["Expense"].sum()
     ytd_sav   = monthly["Savings"].sum()
-    ytd_net   = ytd_inc - ytd_exp
+    ytd_net   = monthly["Net"].sum()
 
     st.markdown(
         f"""
@@ -1444,8 +1444,8 @@ with tab4:
     ))
     fig_mb.add_trace(go.Bar(
         x=monthly["MonthLabel"], y=monthly["Savings"],
-        name="Savings/Tabung", marker_color="#00b4d8",
-        hovertemplate="<b>%{x}</b><br>Savings: RM %{y:,.2f}<extra></extra>",
+        name="Net Tabung Movement", marker_color="#00b4d8",
+        hovertemplate="<b>%{x}</b><br>Net Tabung movement: RM %{y:,.2f}<extra></extra>",
     ))
     fig_mb.update_layout(
         **DARK,
@@ -1520,10 +1520,10 @@ with tab4:
         )
         fig_sr.update_layout(
             **DARK,
-            title=dict(text="Green = healthy (>20%) | Amber = OK (5-20%) | Red = low",
+            title=dict(text="Savings rate after expenses and external transfers | Red includes deficits",
                        font=dict(size=12, color="#c8d6e5")),
             xaxis=dict(tickangle=-30, gridcolor="rgba(255,255,255,0.04)"),
-            yaxis=dict(ticksuffix="%", gridcolor="rgba(255,255,255,0.06)", range=[0, max(monthly["SavingsRate"].max() * 1.3, 30)]),
+            yaxis=dict(ticksuffix="%", gridcolor="rgba(255,255,255,0.06)", range=[min(monthly["SavingsRate"].min() * 1.1, 0), max(monthly["SavingsRate"].max() * 1.3, 30)]),
             showlegend=False, height=370,
         )
         st.plotly_chart(fig_sr, use_container_width=True)
