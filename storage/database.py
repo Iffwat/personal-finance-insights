@@ -5,6 +5,7 @@ committed; bank statements and transaction records remain local to the user.
 """
 from pathlib import Path
 import sqlite3
+from contextlib import contextmanager
 
 import pandas as pd
 
@@ -14,12 +15,16 @@ DATA_DIR = PROJECT_DIR / "data"
 DB_PATH = DATA_DIR / "finance.sqlite3"
 
 
+@contextmanager
 def _connect():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(DB_PATH), timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def init_db():
