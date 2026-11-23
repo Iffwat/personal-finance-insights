@@ -828,29 +828,43 @@ with tab3:
     wdf["DayOfWeek"] = wdf["Date"].dt.day_name()
     wdf["DayNum"]    = wdf["Date"].dt.dayofweek      # 0=Mon … 6=Sun
 
-    # -- Weekly income / expense / savings pivot ----------------------------
-    inc_w  = (wdf[wdf["Type"] == "Income"]
+    # -- Weekly income / expense / transfer pivot --------------------------
+    inc_w = (wdf[wdf["Type"] == "Income"]
+             .groupby("Week")["Amount"].sum().reset_index()
+             .rename(columns={"Amount": "Income"}))
+    reim_w = (wdf[wdf["Type"] == "Reimbursement"]
               .groupby("Week")["Amount"].sum().reset_index()
-              .rename(columns={"Amount": "Income"}))
-    exp_w  = (wdf[wdf["Type"] == "Expense"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby("Week")["Amount"].sum().reset_index()
-              .rename(columns={"Amount": "Expense"}))
-    sav_w  = (wdf[wdf["Type"] == "Savings Transfer"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby("Week")["Amount"].sum().reset_index()
-              .rename(columns={"Amount": "Savings"}))
+              .rename(columns={"Amount": "Reimbursements"}))
+    exp_w = (wdf[wdf["Type"] == "Expense"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby("Week")["Amount"].sum().reset_index()
+             .rename(columns={"Amount": "Expense"}))
+    ext_in_w = (wdf[(wdf["Type"] == "External Transfer") & (wdf["Amount"] > 0)]
+                .groupby("Week")["Amount"].sum().reset_index()
+                .rename(columns={"Amount": "TransfersIn"}))
+    ext_out_w = (wdf[(wdf["Type"] == "External Transfer") & (wdf["Amount"] < 0)].copy()
+                 .assign(Amount=lambda x: x["Amount"].abs())
+                 .groupby("Week")["Amount"].sum().reset_index()
+                 .rename(columns={"Amount": "TransfersOut"}))
+    inv_w = (wdf[wdf["Type"] == "Investment"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby("Week")["Amount"].sum().reset_index()
+             .rename(columns={"Amount": "Investments"}))
+    tabung_w = (wdf[wdf["Type"] == "Internal Transfer"]
+                .groupby("Week")["Amount"].sum().reset_index())
+    tabung_w["Savings"] = -tabung_w["Amount"]
+    tabung_w = tabung_w[["Week", "Savings"]]
 
-    weekly = (
-        inc_w
-        .merge(exp_w, on="Week", how="outer")
-        .merge(sav_w, on="Week", how="outer")
-        .fillna(0)
-        .sort_values("Week")
+    weekly = inc_w
+    for part in [reim_w, exp_w, ext_in_w, ext_out_w, inv_w, tabung_w]:
+        weekly = weekly.merge(part, on="Week", how="outer")
+    weekly = weekly.fillna(0).sort_values("Week")
+    weekly["Net"] = (
+        weekly["Income"] + weekly["Reimbursements"] + weekly["TransfersIn"]
+        - weekly["Expense"] - weekly["TransfersOut"] - weekly["Investments"]
     )
-    weekly["Net"]        = weekly["Income"] - weekly["Expense"]
-    weekly["WeekLabel"]  = weekly["Week"].dt.strftime("W%W\n%d %b")
-    weekly["NetClass"]   = weekly["Net"].apply(lambda v: "Surplus" if v >= 0 else "Deficit")
+    weekly["WeekLabel"] = weekly["Week"].dt.strftime("W%W\\n%d %b")
+    weekly["NetClass"] = weekly["Net"].apply(lambda v: "Surplus" if v >= 0 else "Deficit")
 
     # ── SECTION 1: Weekly KPI strip ─────────────────────────────────────────
     num_weeks   = len(weekly)
@@ -919,8 +933,8 @@ with tab3:
     ))
     fig_wb.add_trace(go.Bar(
         x=weekly["WeekLabel"], y=weekly["Savings"],
-        name="Savings/Tabung", marker_color="#00b4d8",
-        hovertemplate="<b>%{x}</b><br>Savings: RM %{y:,.2f}<extra></extra>",
+        name="Net Tabung Movement", marker_color="#00b4d8",
+        hovertemplate="<b>%{x}</b><br>Net Tabung movement: RM %{y:,.2f}<extra></extra>",
     ))
     fig_wb.update_layout(
         **DARK,
@@ -1348,9 +1362,9 @@ with tab4:
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Saved</div>
-            <div class="kpi-label">Total Tabung</div>
+            <div class="kpi-label">Net Tabung Movement</div>
             <div class="kpi-value savings">RM {ytd_sav:,.2f}</div>
-            <div class="kpi-sub savings">Cumulative savings</div>
+            <div class="kpi-sub savings">Net deposits after withdrawals</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Net</div>
@@ -1373,7 +1387,7 @@ with tab4:
 
     # ── VISUAL 1: Grouped monthly bar chart ──────────────────────────────────
     st.markdown(
-        '<div class="section-header-week">Monthly Income vs Expenses vs Savings</div>',
+        '<div class="section-header-week">Monthly Income, Expenses & Net Tabung Movement</div>',
         unsafe_allow_html=True,
     )
     fig_mb = go.Figure()
@@ -1521,18 +1535,26 @@ with tab4:
         unsafe_allow_html=True,
     )
     display_monthly = monthly[[
-        "MonthLabel", "Income", "Expense", "Savings", "Net", "SavingsRate"
+        "MonthLabel", "Income", "Reimbursements", "TransfersIn", "Expense",
+        "TransfersOut", "Investments", "TabungNet", "Net", "SavingsRate"
     ]].copy()
     display_monthly = display_monthly.rename(columns={
-        "MonthLabel":  "Month",
-        "Income":      "Income (RM)",
-        "Expense":     "Expense (RM)",
-        "Savings":     "Tabung (RM)",
-        "Net":         "Net Flow (RM)",
+        "MonthLabel": "Month",
+        "Income": "Income (RM)",
+        "Reimbursements": "Reimbursements (RM)",
+        "TransfersIn": "Transfers In (RM)",
+        "Expense": "Actual Expenses (RM)",
+        "TransfersOut": "Transfers Out (RM)",
+        "Investments": "Investments (RM)",
+        "TabungNet": "Net Tabung Movement (RM)",
+        "Net": "Overall Surplus (RM)",
         "SavingsRate": "Savings Rate (%)",
     })
-    # Format numeric columns
-    for col in ["Income (RM)", "Expense (RM)", "Tabung (RM)", "Net Flow (RM)"]:
+    for col in [
+        "Income (RM)", "Reimbursements (RM)", "Transfers In (RM)",
+        "Actual Expenses (RM)", "Transfers Out (RM)", "Investments (RM)",
+        "Net Tabung Movement (RM)", "Overall Surplus (RM)"
+    ]:
         display_monthly[col] = display_monthly[col].map(lambda v: f"RM {v:,.2f}")
     display_monthly["Savings Rate (%)"] = display_monthly["Savings Rate (%)"].map(
         lambda v: f"{v:.1f}%"
