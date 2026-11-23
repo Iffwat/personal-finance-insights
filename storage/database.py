@@ -23,6 +23,10 @@ def _connect():
     connection.execute("PRAGMA foreign_keys = ON")
     try:
         yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
