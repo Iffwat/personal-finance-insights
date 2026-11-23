@@ -35,6 +35,12 @@ RULES = [
 def categorize_transaction(description: str, amount: float = 0.0):
     """Return (category, type override); internal transfers are not income/expense."""
     desc = str(description or "").lower().strip()
+    # Match named own-account destinations (Future/Tabung and Booster) first.
+    for rule in RULES[:3]:
+        if any(keyword in desc for keyword in rule["keywords"]):
+            return rule["category"], rule.get("type_override")
+    # Maybank rows where the counterparty is the account holder's own name
+    # and the memo is a wallet/budget label are account allocations, not spend.
     if "muhammad irsyad iff" in desc:
         if "toll" in desc:
             return "Toll Allocation", "Internal Transfer"
@@ -43,7 +49,7 @@ def categorize_transaction(description: str, amount: float = 0.0):
         if "game" in desc:
             return "Entertainment Allocation", "Internal Transfer"
         return "Other Internal Transfer", "Internal Transfer"
-    for rule in RULES:
+    for rule in RULES[3:]:
         if any(keyword in desc for keyword in rule["keywords"]):
             return rule["category"], rule.get("type_override")
     return "Other", None
