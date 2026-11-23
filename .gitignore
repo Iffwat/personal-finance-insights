@@ -9,8 +9,10 @@ __pycache__/
 *.sqlite3
 data.db
 
-# Storage and Data folders (contains user data/statements)
-storage/
+# Keep storage application modules under version control, but ignore generated
+# local data and statement files.
+storage/*
+!storage/*.py
 data/
 
 # Virtual Environments

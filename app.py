@@ -225,6 +225,8 @@ if clean_df.empty:
         )
     st.stop()
 
+# Reclassify both newly imported and historical rows with the current rules.
+clean_df = process_transactions(clean_df)
 clean_df = clean_df.sort_values("Date")
 
 # ── Sidebar Filters (rendered after data is ready) ────────────────────────────
@@ -338,23 +340,69 @@ if filtered < total_rows:
     )
 
 # ── Derived aggregates from filtered data ─────────────────────────────────────
-savings_in_df  = df[df["Category"] == "Savings / Tabung"].copy()
-savings_out_df = df[df["Category"] == "Tabung Withdrawal"].copy()
+# Future / Tabung deposits and withdrawals are movements between your own
+# accounts. They are shown separately and excluded from income and expenses.
+internal_df = df[df["Type"] == "Internal Transfer"].copy()
+savings_in_df = internal_df[
+    (internal_df["Category"] == "Savings / Tabung") & (internal_df["Amount"] < 0)
+].copy()
+Savings_Categories = ["Savings / Tabung", "Tabung Withdrawal"]
+tabung_df = internal_df[internal_df["Category"].isin(Savings_Categories)].copy()
+other_internal_df = internal_df[~internal_df["Category"].isin(Savings_Categories)].copy()
+savings_out_df = internal_df[
+    (internal_df["Category"] == "Tabung Withdrawal") & (internal_df["Amount"] > 0)
+].copy()
+income_df = df[df["Type"] == "Income"].copy()
+reimbursement_df = df[df["Type"] == "Reimbursement"].copy()
+expense_df = df[df["Type"] == "Expense"].copy()
+external_transfer_df = df[df["Type"] == "External Transfer"].copy()
+investment_df = df[df["Type"] == "Investment"].copy()
 
-income_df      = df[(df["Type"] == "Income") & (df["Category"] != "Tabung Withdrawal")]
-expense_df     = df[(df["Type"] == "Expense") & (df["Category"] != "Savings / Tabung")].copy()
-
-expense_df["Amount"]    = expense_df["Amount"].abs()
+expense_df["Amount"] = expense_df["Amount"].abs()
 savings_in_df["Amount"] = savings_in_df["Amount"].abs()
+savings_out_df["Amount"] = savings_out_df["Amount"].abs()
+investment_df["Amount"] = investment_df["Amount"].abs()
 
-total_income       = income_df["Amount"].sum()
-total_expenses     = expense_df["Amount"].sum()
-total_savings_in   = savings_in_df["Amount"].sum()
-total_savings_out  = savings_out_df["Amount"].sum()
+total_income = income_df["Amount"].clip(lower=0).sum()
+total_reimbursements = reimbursement_df["Amount"].clip(lower=0).sum()
+total_expenses = expense_df["Amount"].sum()
+total_external_transfer_in = external_transfer_df.loc[
+    external_transfer_df["Amount"] > 0, "Amount"
+].sum()
+total_external_transfer_out = external_transfer_df.loc[
+    external_transfer_df["Amount"] < 0, "Amount"
+].abs().sum()
+total_investments = investment_df["Amount"].sum()
+total_savings_in = savings_in_df["Amount"].sum()
+total_savings_out = savings_out_df["Amount"].sum()
+net_tabung_movement = total_savings_in - total_savings_out
+total_other_internal_in = other_internal_df.loc[
+    other_internal_df["Amount"] > 0, "Amount"
+].sum()
+total_other_internal_out = other_internal_df.loc[
+    other_internal_df["Amount"] < 0, "Amount"
+].abs().sum()
+net_other_internal_movement = total_other_internal_out - total_other_internal_in
 
-net_flow           = total_income - total_expenses
+# Change in the main account includes Tabung movements; overall surplus across
+# owned accounts excludes them. Both figures are useful, but neither treats a
+# Tabung withdrawal as new income.
+net_system_surplus = (
+    total_income + total_reimbursements + total_external_transfer_in
+    - total_expenses - total_external_transfer_out - total_investments
+)
+net_flow = net_system_surplus
+net_remaining = (
+    total_income + total_reimbursements + total_external_transfer_in
+    + total_savings_out + total_other_internal_in
+    - total_expenses - total_external_transfer_out - total_investments
+    - total_savings_in - total_other_internal_out
+)
+# Savings rate includes investments as retained wealth, but excludes
+# movements between owned accounts. Reimbursements and third-party receipts
+# remain separate from earned income.
 savings_rate = (
-    (net_flow + total_savings_in) / total_income * 100
+    (total_income - total_expenses - total_external_transfer_out) / total_income * 100
     if total_income > 0 else 0.0
 )
 
@@ -363,9 +411,8 @@ cat_summary = (
     .sum().reset_index()
     .sort_values("Amount", ascending=False)
 )
-top_cat     = cat_summary.iloc[0]["Category"] if not cat_summary.empty else "N/A"
-top_cat_amt = cat_summary.iloc[0]["Amount"]   if not cat_summary.empty else 0.0
-net_remaining = total_income - total_expenses - total_savings_in + total_savings_out
+top_cat = cat_summary.iloc[0]["Category"] if not cat_summary.empty else "N/A"
+top_cat_amt = cat_summary.iloc[0]["Amount"] if not cat_summary.empty else 0.0
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Cash Flow Map", "Weekly Analysis", "Monthly Trends", "Budgets & Targets"])
@@ -451,29 +498,29 @@ with tab2:
             <div class="kpi-icon">Income</div>
             <div class="kpi-label">Total Income</div>
             <div class="kpi-value positive">RM {total_income:,.2f}</div>
-            <div class="kpi-sub positive">All inflows</div>
+            <div class="kpi-sub positive">Salary / earned income</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Expenses</div>
             <div class="kpi-label">Total Expenses</div>
             <div class="kpi-value negative">RM {total_expenses:,.2f}</div>
-            <div class="kpi-sub negative">All outflows</div>
+            <div class="kpi-sub negative">Purchases and bills only</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Tabung</div>
-            <div class="kpi-label">Savings / Tabung</div>
-            <div class="kpi-value savings">RM {total_savings_in:,.2f}</div>
-            <div class="kpi-sub savings">Transferred to funds</div>
+            <div class="kpi-label">Net Tabung Movement</div>
+            <div class="kpi-value savings">RM {net_tabung_movement:,.2f}</div>
+            <div class="kpi-sub savings">Positive = added to Tabung</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Net</div>
-            <div class="kpi-label">Net Cash Flow</div>
+            <div class="kpi-label">Overall Surplus</div>
             <div class="kpi-value {net_class}">RM {net_flow:,.2f}</div>
-            <div class="kpi-sub {net_class}">{net_label} this period</div>
+            <div class="kpi-sub {net_class}">{net_label}, excluding own-account movements</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Rate</div>
-            <div class="kpi-label">Savings Rate</div>
+            <div class="kpi-label">Personal Savings Rate</div>
             <div class="kpi-value {sr_class}">{savings_rate:.1f}%</div>
             <div class="kpi-sub {sr_class}">{sr_label}</div>
           </div>
@@ -490,48 +537,92 @@ with tab2:
 
     st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
 
-    # Sankey
+    st.markdown('<div class="section-header">Future / Tabung Reconciliation</div>', unsafe_allow_html=True)
+    tabung_a, tabung_b, tabung_c = st.columns(3)
+    tabung_a.metric("Deposited into Tabung", f"RM {total_savings_in:,.2f}")
+    tabung_b.metric("Withdrawn from Tabung", f"RM {total_savings_out:,.2f}")
+    tabung_c.metric(
+        "Net Tabung Movement",
+        f"RM {net_tabung_movement:,.2f}",
+        help="Positive means more money was moved into Tabung than withdrawn. This is an internal movement, not an expense or income."
+    )
+    st.caption("Future / Tabung is your own holding account. Deposits and withdrawals are shown for visibility but are excluded from income and actual spending.")
+    if not tabung_df.empty:
+        st.dataframe(
+            tabung_df[["Date", "Description", "Amount", "Category"]].sort_values("Date"),
+            use_container_width=True,
+            hide_index=True,
+        )
+    if not other_internal_df.empty:
+        with st.expander("Other own-account allocations (Toll, Insurance, Booster, etc.)"):
+            st.caption("These are detected account movements, not confirmed purchases. They are excluded from living expenses and shown separately.")
+            st.metric("Net moved to other own-account allocations", f"RM {net_other_internal_movement:,.2f}")
+            st.dataframe(
+                other_internal_df[["Date", "Description", "Amount", "Category"]].sort_values("Date"),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+    # Sankey: Tabung withdrawals are a funding source for the main account,
+    # not salary. Deposits are an internal allocation, not an expense.
     st.markdown(
         '<div class="section-header">Cash Flow Sankey Map</div>',
         unsafe_allow_html=True,
     )
-    nodes       = ["Your Income", "Cash Pool"]
+    nodes = ["Your Income", "Cash Pool"]
     node_colors = ["#00e396", "#775dd0"]
     srcs, tgts, vals, lcolors = [], [], [], []
 
+    def add_inflow(label, amount, color):
+        if amount > 0:
+            nodes.append(label)
+            node_colors.append(color)
+            srcs.append(len(nodes) - 1)
+            tgts.append(1)
+            vals.append(float(amount))
+            lcolors.append("rgba(0,180,216,0.35)")
+
     if total_income > 0:
         srcs.append(0); tgts.append(1)
-        vals.append(total_income); lcolors.append("rgba(0,227,150,0.35)")
+        vals.append(float(total_income)); lcolors.append("rgba(0,227,150,0.35)")
+    add_inflow("Expense Reimbursements", total_reimbursements, "#74b9ff")
+    add_inflow("Other Transfers In", total_external_transfer_in, "#74b9ff")
+    add_inflow("Tabung Withdrawal (Own Funds)", total_savings_out, "#feb019")
+    add_inflow("Other Own-Account Transfers Returned", total_other_internal_in, "#74b9ff")
 
-    if total_savings_out > 0:
-        nodes.append("Saving out (Withdrawal)"); node_colors.append("#feb019")
-        srcs.append(len(nodes)-1); tgts.append(1)
-        vals.append(total_savings_out); lcolors.append("rgba(254,176,25,0.35)")
-
-    if total_expenses > (total_income + total_savings_out):
-        nodes.append("Deficit"); node_colors.append("#ff4560")
-        srcs.append(len(nodes)-1); tgts.append(1)
-        vals.append(total_expenses - (total_income + total_savings_out))
-        lcolors.append("rgba(255,69,96,0.35)")
+    # When outflows exceed inflows, show the gap as a deficit source so the
+    # Sankey remains balanced without pretending the gap is new income.
+    if net_remaining < 0:
+        nodes.append("Deficit / Opening Funds")
+        node_colors.append("#ff4560")
+        srcs.append(len(nodes) - 1); tgts.append(1)
+        vals.append(float(abs(net_remaining))); lcolors.append("rgba(255,69,96,0.35)")
 
     for i, (_, row) in enumerate(cat_summary.iterrows()):
         if row["Amount"] > 0:
             nodes.append(row["Category"])
             node_colors.append(PAL[i % len(PAL)])
-            srcs.append(1); tgts.append(len(nodes)-1)
-            vals.append(row["Amount"])
+            srcs.append(1); tgts.append(len(nodes) - 1)
+            vals.append(float(row["Amount"]))
             r, g, b = px.colors.hex_to_rgb(PAL[i % len(PAL)])
             lcolors.append(f"rgba({r},{g},{b},0.4)")
 
-    if total_savings_in > 0:
-        nodes.append("Saving in (Tabung)"); node_colors.append("#00b4d8")
-        srcs.append(1); tgts.append(len(nodes)-1)
-        vals.append(total_savings_in); lcolors.append("rgba(0,180,216,0.5)")
+    def add_outflow(label, amount, color):
+        if amount > 0:
+            nodes.append(label)
+            node_colors.append(color)
+            srcs.append(1); tgts.append(len(nodes) - 1)
+            vals.append(float(amount))
+            lcolors.append("rgba(255,255,255,0.25)")
 
+    add_outflow("Transfers to Other People", total_external_transfer_out, "#e17055")
+    add_outflow("Investments / ASB", total_investments, "#00cec9")
+    add_outflow("Moved into Tabung (Own Funds)", total_savings_in, "#00b4d8")
+    add_outflow("Other Own-Account Allocations", total_other_internal_out, "#74b9ff")
     if net_remaining > 0:
-        nodes.append("Net Remaining"); node_colors.append("#26de81")
-        srcs.append(1); tgts.append(len(nodes)-1)
-        vals.append(net_remaining); lcolors.append("rgba(38,222,129,0.5)")
+        add_outflow("Net Remaining in Main Account", net_remaining, "#26de81")
 
     fig_s = go.Figure(go.Sankey(
         arrangement="snap",
@@ -551,8 +642,9 @@ with tab2:
     ))
     fig_s.update_layout(
         **DARK,
-        title=dict(text="Monthly Cash Flow", font=dict(size=16, color="#c8d6e5")),
-        height=480,
+        title=dict(text="Income, spending and movement between your own accounts",
+                   font=dict(size=16, color="#c8d6e5")),
+        height=520,
     )
     st.plotly_chart(fig_s, use_container_width=True)
     st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
@@ -564,17 +656,29 @@ with tab2:
             '<div class="section-header">Waterfall — Income to Net Flow</div>',
             unsafe_allow_html=True,
         )
-        wf_x = ["Income"] + cat_summary["Category"].tolist()
-        wf_y = [total_income] + (-cat_summary["Amount"]).tolist()
-        wf_m = ["absolute"] + ["relative"] * len(cat_summary)
-        if total_savings_out > 0:
-            wf_x.append("Saving out"); wf_y.append(total_savings_out)
-            wf_m.append("relative")
-        if total_savings_in > 0:
-            wf_x.append("Saving in"); wf_y.append(-total_savings_in)
-            wf_m.append("relative")
-        wf_x.append("Net Flow")
-        wf_y.append(net_remaining if net_remaining >= 0 else net_flow)
+        wf_x = ["Income"]
+        wf_y = [total_income]
+        wf_m = ["absolute"]
+        for label, amount in [
+            ("Reimbursements", total_reimbursements),
+            ("Other transfers in", total_external_transfer_in),
+            ("Tabung withdrawals", total_savings_out),
+            ("Other own-account transfers returned", total_other_internal_in),
+        ]:
+            if amount > 0:
+                wf_x.append(label); wf_y.append(amount); wf_m.append("relative")
+        for _, row in cat_summary.iterrows():
+            wf_x.append(row["Category"]); wf_y.append(-row["Amount"]); wf_m.append("relative")
+        for label, amount in [
+            ("Transfers to others", total_external_transfer_out),
+            ("Investments / ASB", total_investments),
+            ("Tabung deposits", total_savings_in),
+            ("Other own-account allocations", total_other_internal_out),
+        ]:
+            if amount > 0:
+                wf_x.append(label); wf_y.append(-amount); wf_m.append("relative")
+        wf_x.append("Main Account Net Change")
+        wf_y.append(net_remaining)
         wf_m.append("total")
 
         fig_wf = go.Figure(go.Waterfall(
@@ -756,29 +860,47 @@ with tab3:
     wdf["DayOfWeek"] = wdf["Date"].dt.day_name()
     wdf["DayNum"]    = wdf["Date"].dt.dayofweek      # 0=Mon … 6=Sun
 
-    # -- Weekly income / expense / savings pivot ----------------------------
-    inc_w  = (wdf[wdf["Type"] == "Income"]
+    # -- Weekly income / expense / transfer pivot --------------------------
+    inc_w = (wdf[wdf["Type"] == "Income"]
+             .groupby("Week")["Amount"].sum().reset_index()
+             .rename(columns={"Amount": "Income"}))
+    reim_w = (wdf[wdf["Type"] == "Reimbursement"]
               .groupby("Week")["Amount"].sum().reset_index()
-              .rename(columns={"Amount": "Income"}))
-    exp_w  = (wdf[wdf["Type"] == "Expense"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby("Week")["Amount"].sum().reset_index()
-              .rename(columns={"Amount": "Expense"}))
-    sav_w  = (wdf[wdf["Type"] == "Savings Transfer"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby("Week")["Amount"].sum().reset_index()
-              .rename(columns={"Amount": "Savings"}))
+              .rename(columns={"Amount": "Reimbursements"}))
+    exp_w = (wdf[wdf["Type"] == "Expense"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby("Week")["Amount"].sum().reset_index()
+             .rename(columns={"Amount": "Expense"}))
+    ext_in_w = (wdf[(wdf["Type"] == "External Transfer") & (wdf["Amount"] > 0)]
+                .groupby("Week")["Amount"].sum().reset_index()
+                .rename(columns={"Amount": "TransfersIn"}))
+    ext_out_w = (wdf[(wdf["Type"] == "External Transfer") & (wdf["Amount"] < 0)].copy()
+                 .assign(Amount=lambda x: x["Amount"].abs())
+                 .groupby("Week")["Amount"].sum().reset_index()
+                 .rename(columns={"Amount": "TransfersOut"}))
+    inv_w = (wdf[wdf["Type"] == "Investment"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby("Week")["Amount"].sum().reset_index()
+             .rename(columns={"Amount": "Investments"}))
+    tabung_w = (wdf[(wdf["Type"] == "Internal Transfer") & (wdf["Category"].isin(["Savings / Tabung", "Tabung Withdrawal"]))]
+                .groupby("Week")["Amount"].sum().reset_index())
+    tabung_w["Savings"] = -tabung_w["Amount"]
+    tabung_w = tabung_w[["Week", "Savings"]]
+    other_internal_w = (wdf[(wdf["Type"] == "Internal Transfer") & (~wdf["Category"].isin(["Savings / Tabung", "Tabung Withdrawal"]))]
+                        .groupby("Week")["Amount"].sum().reset_index())
+    other_internal_w["OtherInternalNet"] = -other_internal_w["Amount"]
+    other_internal_w = other_internal_w[["Week", "OtherInternalNet"]]
 
-    weekly = (
-        inc_w
-        .merge(exp_w, on="Week", how="outer")
-        .merge(sav_w, on="Week", how="outer")
-        .fillna(0)
-        .sort_values("Week")
+    weekly = inc_w
+    for part in [reim_w, exp_w, ext_in_w, ext_out_w, inv_w, tabung_w, other_internal_w]:
+        weekly = weekly.merge(part, on="Week", how="outer")
+    weekly = weekly.fillna(0).sort_values("Week")
+    weekly["Net"] = (
+        weekly["Income"] + weekly["Reimbursements"] + weekly["TransfersIn"]
+        - weekly["Expense"] - weekly["TransfersOut"] - weekly["Investments"]
     )
-    weekly["Net"]        = weekly["Income"] - weekly["Expense"]
-    weekly["WeekLabel"]  = weekly["Week"].dt.strftime("W%W\n%d %b")
-    weekly["NetClass"]   = weekly["Net"].apply(lambda v: "Surplus" if v >= 0 else "Deficit")
+    weekly["WeekLabel"] = weekly["Week"].dt.strftime("W%W\\n%d %b")
+    weekly["NetClass"] = weekly["Net"].apply(lambda v: "Surplus" if v >= 0 else "Deficit")
 
     # ── SECTION 1: Weekly KPI strip ─────────────────────────────────────────
     num_weeks   = len(weekly)
@@ -831,7 +953,7 @@ with tab3:
 
     # ── VISUAL 1: Grouped bar — weekly income vs expense ──────────────────
     st.markdown(
-        '<div class="section-header-week">Weekly Income vs Expenses</div>',
+        '<div class="section-header-week">Weekly Income, Expenses & Net Tabung Movement</div>',
         unsafe_allow_html=True,
     )
     fig_wb = go.Figure()
@@ -847,8 +969,8 @@ with tab3:
     ))
     fig_wb.add_trace(go.Bar(
         x=weekly["WeekLabel"], y=weekly["Savings"],
-        name="Savings/Tabung", marker_color="#00b4d8",
-        hovertemplate="<b>%{x}</b><br>Savings: RM %{y:,.2f}<extra></extra>",
+        name="Net Tabung Movement", marker_color="#00b4d8",
+        hovertemplate="<b>%{x}</b><br>Net Tabung movement: RM %{y:,.2f}<extra></extra>",
     ))
     fig_wb.update_layout(
         **DARK,
@@ -1071,15 +1193,21 @@ with tab3:
         week_detail = wdf[wdf["WeekLabel"] == sel_week].copy()
 
         d1, d2, d3 = st.columns(3)
-        w_inc = week_detail[week_detail["Type"] == "Income"]["Amount"].sum()
+        w_inc = week_detail[week_detail["Type"] == "Income"]["Amount"].clip(lower=0).sum()
+        w_reim = week_detail[week_detail["Type"] == "Reimbursement"]["Amount"].clip(lower=0).sum()
         w_exp = week_detail[week_detail["Type"] == "Expense"]["Amount"].abs().sum()
-        w_net = w_inc - w_exp
+        w_ext = week_detail[week_detail["Type"] == "External Transfer"]
+        w_ext_in = w_ext.loc[w_ext["Amount"] > 0, "Amount"].sum()
+        w_ext_out = w_ext.loc[w_ext["Amount"] < 0, "Amount"].abs().sum()
+        w_inv = week_detail[week_detail["Type"] == "Investment"]["Amount"].abs().sum()
+        w_net = w_inc + w_reim + w_ext_in - w_exp - w_ext_out - w_inv
         nc    = "positive" if w_net >= 0 else "negative"
         nl    = "Surplus" if w_net >= 0 else "Deficit"
 
         d1.metric("Income", f"RM {w_inc:,.2f}")
-        d2.metric("Expenses", f"RM {w_exp:,.2f}")
-        d3.metric("Net Flow", f"RM {w_net:,.2f}", delta=f"{nl}")
+        d2.metric("Actual expenses", f"RM {w_exp:,.2f}")
+        d3.metric("Overall surplus", f"RM {w_net:,.2f}", delta=f"{nl}")
+        st.caption(f"Weekly calculation also accounts for reimbursements (RM {w_reim:,.2f}), transfers in (RM {w_ext_in:,.2f}), transfers out (RM {w_ext_out:,.2f}) and investments (RM {w_inv:,.2f}). Own-account transfers are excluded.")
 
         col_det1, col_det2 = st.columns([2, 1])
         with col_det1:
@@ -1115,9 +1243,9 @@ with tab5:
     budgets = load_budgets()
     
     from analysis.processor import RULES
-    all_known_cats = sorted(list(set(r["category"] for r in RULES if r["category"] not in ["Salary / Income", "Transfer In", "Tabung Withdrawal"])))
+    all_known_cats = sorted(list(set(r["category"] for r in RULES if r["category"] not in ["Salary / Income", "Expense Reimbursement", "Person-to-Person Transfer", "Savings / Tabung", "Tabung Withdrawal", "Investment / ASB", "Other Internal Transfer", "Toll Allocation", "Insurance Allocation", "Entertainment Allocation"])))
     
-    data_cats = set(expense_df["Category"].unique()).union(set(savings_in_df["Category"].unique()))
+    data_cats = set(expense_df["Category"].unique())
     all_cats = sorted(list(set(all_known_cats).union(data_cats)))
     
     col_l, col_r = st.columns([1, 2])
@@ -1140,8 +1268,6 @@ with tab5:
         st.markdown("### Budget vs Actual (Selected Period)")
         
         actuals = expense_df.groupby("Category")["Amount"].sum().to_dict()
-        sav_actuals = savings_in_df.groupby("Category")["Amount"].sum().to_dict()
-        actuals.update(sav_actuals)
         
         budget_data = []
         for cat in all_cats:
@@ -1194,36 +1320,60 @@ with tab4:
         st.warning("Month/year metadata not found. Re-import statements to see this tab.")
         st.stop()
 
-    # Build per-month aggregates
-    inc_m  = (mdf[mdf["Type"] == "Income"]
+    # Build per-month aggregates. Internal Tabung transfers are netted
+    # separately; withdrawals are not counted as new income.
+    inc_m = (mdf[mdf["Type"] == "Income"]
+             .groupby(["year", "month"])["Amount"].sum()
+             .reset_index().rename(columns={"Amount": "Income"}))
+    reim_m = (mdf[mdf["Type"] == "Reimbursement"]
               .groupby(["year", "month"])["Amount"].sum()
-              .reset_index().rename(columns={"Amount": "Income"}))
-    exp_m  = (mdf[mdf["Type"] == "Expense"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby(["year", "month"])["Amount"].sum()
-              .reset_index().rename(columns={"Amount": "Expense"}))
-    sav_m  = (mdf[mdf["Category"] == "Savings / Tabung"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby(["year", "month"])["Amount"].sum()
-              .reset_index().rename(columns={"Amount": "Savings"}))
+              .reset_index().rename(columns={"Amount": "Reimbursements"}))
+    exp_m = (mdf[mdf["Type"] == "Expense"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby(["year", "month"])["Amount"].sum()
+             .reset_index().rename(columns={"Amount": "Expense"}))
+    ext_in_m = (mdf[(mdf["Type"] == "External Transfer") & (mdf["Amount"] > 0)]
+                .groupby(["year", "month"])["Amount"].sum()
+                .reset_index().rename(columns={"Amount": "TransfersIn"}))
+    ext_out_m = (mdf[(mdf["Type"] == "External Transfer") & (mdf["Amount"] < 0)].copy()
+                 .assign(Amount=lambda x: x["Amount"].abs())
+                 .groupby(["year", "month"])["Amount"].sum()
+                 .reset_index().rename(columns={"Amount": "TransfersOut"}))
+    inv_m = (mdf[mdf["Type"] == "Investment"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby(["year", "month"])["Amount"].sum()
+             .reset_index().rename(columns={"Amount": "Investments"}))
+    tabung_m = (mdf[(mdf["Type"] == "Internal Transfer") & (mdf["Category"].isin(["Savings / Tabung", "Tabung Withdrawal"]))]
+                .groupby(["year", "month"])["Amount"].sum()
+                .reset_index())
+    other_internal_m = (mdf[(mdf["Type"] == "Internal Transfer") & (~mdf["Category"].isin(["Savings / Tabung", "Tabung Withdrawal"]))]
+                        .groupby(["year", "month"])["Amount"].sum()
+                        .reset_index())
+    other_internal_m["OtherInternalNet"] = -other_internal_m["Amount"]
+    other_internal_m = other_internal_m[["year", "month", "OtherInternalNet"]]
+    tabung_m["TabungNet"] = -tabung_m["Amount"]
+    tabung_m = tabung_m[["year", "month", "TabungNet"]]
 
-    monthly = (
-        inc_m
-        .merge(exp_m, on=["year", "month"], how="outer")
-        .merge(sav_m, on=["year", "month"], how="outer")
-        .fillna(0)
-        .sort_values(["year", "month"])
-    )
+    monthly = inc_m
+    for part in [reim_m, exp_m, ext_in_m, ext_out_m, inv_m, tabung_m, other_internal_m]:
+        monthly = monthly.merge(part, on=["year", "month"], how="outer")
+    monthly = monthly.fillna(0).sort_values(["year", "month"])
     monthly["MonthLabel"] = monthly.apply(
         lambda r: f"{_cal.month_abbr[int(r['month'])]} {int(r['year'])}", axis=1
     )
-    monthly["Net"] = monthly["Income"] - monthly["Expense"]
+    # TabungNet is positive when more was deposited than withdrawn.
+    monthly["Savings"] = monthly["TabungNet"]
+    monthly["Net"] = (
+        monthly["Income"] + monthly["Reimbursements"] + monthly["TransfersIn"]
+        - monthly["Expense"] - monthly["TransfersOut"] - monthly["Investments"]
+    )
     monthly["SavingsRate"] = (
-        (monthly["Net"] + monthly["Savings"]) / monthly["Income"].replace(0, float("nan")) * 100
+        (monthly["Income"] - monthly["Expense"] - monthly["TransfersOut"])
+        / monthly["Income"].replace(0, float("nan")) * 100
     ).fillna(0).round(1)
     monthly["Expense_Roll3"] = monthly["Expense"].rolling(3, min_periods=1).mean()
-    monthly["Expense_MoM"]   = monthly["Expense"].diff()
-    monthly["Expense_MoMPct"]= (monthly["Expense"].pct_change() * 100).round(1)
+    monthly["Expense_MoM"] = monthly["Expense"].diff()
+    monthly["Expense_MoMPct"] = (monthly["Expense"].pct_change() * 100).round(1)
 
     num_months = len(monthly)
 
@@ -1235,7 +1385,7 @@ with tab4:
     ytd_inc   = monthly["Income"].sum()
     ytd_exp   = monthly["Expense"].sum()
     ytd_sav   = monthly["Savings"].sum()
-    ytd_net   = ytd_inc - ytd_exp
+    ytd_net   = monthly["Net"].sum()
 
     st.markdown(
         f"""
@@ -1260,9 +1410,9 @@ with tab4:
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Saved</div>
-            <div class="kpi-label">Total Tabung</div>
+            <div class="kpi-label">Net Tabung Movement</div>
             <div class="kpi-value savings">RM {ytd_sav:,.2f}</div>
-            <div class="kpi-sub savings">Cumulative savings</div>
+            <div class="kpi-sub savings">Net deposits after withdrawals</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Net</div>
@@ -1285,7 +1435,7 @@ with tab4:
 
     # ── VISUAL 1: Grouped monthly bar chart ──────────────────────────────────
     st.markdown(
-        '<div class="section-header-week">Monthly Income vs Expenses vs Savings</div>',
+        '<div class="section-header-week">Monthly Income, Expenses & Net Tabung Movement</div>',
         unsafe_allow_html=True,
     )
     fig_mb = go.Figure()
@@ -1301,8 +1451,8 @@ with tab4:
     ))
     fig_mb.add_trace(go.Bar(
         x=monthly["MonthLabel"], y=monthly["Savings"],
-        name="Savings/Tabung", marker_color="#00b4d8",
-        hovertemplate="<b>%{x}</b><br>Savings: RM %{y:,.2f}<extra></extra>",
+        name="Net Tabung Movement", marker_color="#00b4d8",
+        hovertemplate="<b>%{x}</b><br>Net Tabung movement: RM %{y:,.2f}<extra></extra>",
     ))
     fig_mb.update_layout(
         **DARK,
@@ -1353,7 +1503,7 @@ with tab4:
 
     with col_m2:
         st.markdown(
-            '<div class="section-header-week">Monthly Savings Rate</div>',
+            '<div class="section-header-week">Monthly Personal Savings Rate</div>',
             unsafe_allow_html=True,
         )
         sr_colors = [
@@ -1377,10 +1527,10 @@ with tab4:
         )
         fig_sr.update_layout(
             **DARK,
-            title=dict(text="Green = healthy (>20%) | Amber = OK (5-20%) | Red = low",
+            title=dict(text="Savings rate after expenses and external transfers | Red includes deficits",
                        font=dict(size=12, color="#c8d6e5")),
             xaxis=dict(tickangle=-30, gridcolor="rgba(255,255,255,0.04)"),
-            yaxis=dict(ticksuffix="%", gridcolor="rgba(255,255,255,0.06)", range=[0, max(monthly["SavingsRate"].max() * 1.3, 30)]),
+            yaxis=dict(ticksuffix="%", gridcolor="rgba(255,255,255,0.06)", range=[min(monthly["SavingsRate"].min() * 1.1, 0), max(monthly["SavingsRate"].max() * 1.3, 30)]),
             showlegend=False, height=370,
         )
         st.plotly_chart(fig_sr, use_container_width=True)
@@ -1433,20 +1583,29 @@ with tab4:
         unsafe_allow_html=True,
     )
     display_monthly = monthly[[
-        "MonthLabel", "Income", "Expense", "Savings", "Net", "SavingsRate"
+        "MonthLabel", "Income", "Reimbursements", "TransfersIn", "Expense",
+        "TransfersOut", "Investments", "TabungNet", "OtherInternalNet", "Net", "SavingsRate"
     ]].copy()
     display_monthly = display_monthly.rename(columns={
-        "MonthLabel":  "Month",
-        "Income":      "Income (RM)",
-        "Expense":     "Expense (RM)",
-        "Savings":     "Tabung (RM)",
-        "Net":         "Net Flow (RM)",
-        "SavingsRate": "Savings Rate (%)",
+        "MonthLabel": "Month",
+        "Income": "Income (RM)",
+        "Reimbursements": "Reimbursements (RM)",
+        "TransfersIn": "Transfers In (RM)",
+        "Expense": "Actual Expenses (RM)",
+        "TransfersOut": "Transfers Out (RM)",
+        "Investments": "Investments (RM)",
+        "TabungNet": "Net Tabung Movement (RM)",
+        "OtherInternalNet": "Other Own-Account Movement (RM)",
+        "Net": "Overall Surplus (RM)",
+        "SavingsRate": "Personal Savings Rate (%)",
     })
-    # Format numeric columns
-    for col in ["Income (RM)", "Expense (RM)", "Tabung (RM)", "Net Flow (RM)"]:
+    for col in [
+        "Income (RM)", "Reimbursements (RM)", "Transfers In (RM)",
+        "Actual Expenses (RM)", "Transfers Out (RM)", "Investments (RM)",
+        "Net Tabung Movement (RM)", "Other Own-Account Movement (RM)", "Overall Surplus (RM)"
+    ]:
         display_monthly[col] = display_monthly[col].map(lambda v: f"RM {v:,.2f}")
-    display_monthly["Savings Rate (%)"] = display_monthly["Savings Rate (%)"].map(
+    display_monthly["Personal Savings Rate (%)"] = display_monthly["Personal Savings Rate (%)"].map(
         lambda v: f"{v:.1f}%"
     )
     st.dataframe(display_monthly.set_index("Month"), use_container_width=True)
