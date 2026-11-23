@@ -479,25 +479,25 @@ with tab2:
             <div class="kpi-icon">Income</div>
             <div class="kpi-label">Total Income</div>
             <div class="kpi-value positive">RM {total_income:,.2f}</div>
-            <div class="kpi-sub positive">All inflows</div>
+            <div class="kpi-sub positive">Salary / earned income</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Expenses</div>
             <div class="kpi-label">Total Expenses</div>
             <div class="kpi-value negative">RM {total_expenses:,.2f}</div>
-            <div class="kpi-sub negative">All outflows</div>
+            <div class="kpi-sub negative">Purchases and bills only</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Tabung</div>
-            <div class="kpi-label">Savings / Tabung</div>
-            <div class="kpi-value savings">RM {total_savings_in:,.2f}</div>
-            <div class="kpi-sub savings">Transferred to funds</div>
+            <div class="kpi-label">Net Tabung Movement</div>
+            <div class="kpi-value savings">RM {net_tabung_movement:,.2f}</div>
+            <div class="kpi-sub savings">Positive = added to Tabung</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Net</div>
-            <div class="kpi-label">Net Cash Flow</div>
+            <div class="kpi-label">Overall Surplus</div>
             <div class="kpi-value {net_class}">RM {net_flow:,.2f}</div>
-            <div class="kpi-sub {net_class}">{net_label} this period</div>
+            <div class="kpi-sub {net_class}">{net_label}, excluding own-account movements</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-icon">Rate</div>
@@ -626,17 +626,27 @@ with tab2:
             '<div class="section-header">Waterfall — Income to Net Flow</div>',
             unsafe_allow_html=True,
         )
-        wf_x = ["Income"] + cat_summary["Category"].tolist()
-        wf_y = [total_income] + (-cat_summary["Amount"]).tolist()
-        wf_m = ["absolute"] + ["relative"] * len(cat_summary)
-        if total_savings_out > 0:
-            wf_x.append("Saving out"); wf_y.append(total_savings_out)
-            wf_m.append("relative")
-        if total_savings_in > 0:
-            wf_x.append("Saving in"); wf_y.append(-total_savings_in)
-            wf_m.append("relative")
-        wf_x.append("Net Flow")
-        wf_y.append(net_remaining if net_remaining >= 0 else net_flow)
+        wf_x = ["Income"]
+        wf_y = [total_income]
+        wf_m = ["absolute"]
+        for label, amount in [
+            ("Reimbursements", total_reimbursements),
+            ("Other transfers in", total_external_transfer_in),
+            ("Tabung withdrawals", total_savings_out),
+        ]:
+            if amount > 0:
+                wf_x.append(label); wf_y.append(amount); wf_m.append("relative")
+        for _, row in cat_summary.iterrows():
+            wf_x.append(row["Category"]); wf_y.append(-row["Amount"]); wf_m.append("relative")
+        for label, amount in [
+            ("Transfers to others", total_external_transfer_out),
+            ("Investments / ASB", total_investments),
+            ("Tabung deposits", total_savings_in),
+        ]:
+            if amount > 0:
+                wf_x.append(label); wf_y.append(-amount); wf_m.append("relative")
+        wf_x.append("Main Account Net Change")
+        wf_y.append(net_remaining)
         wf_m.append("total")
 
         fig_wf = go.Figure(go.Waterfall(
@@ -1177,9 +1187,9 @@ with tab5:
     budgets = load_budgets()
     
     from analysis.processor import RULES
-    all_known_cats = sorted(list(set(r["category"] for r in RULES if r["category"] not in ["Salary / Income", "Transfer In", "Tabung Withdrawal"])))
+    all_known_cats = sorted(list(set(r["category"] for r in RULES if r["category"] not in ["Salary / Income", "Expense Reimbursement", "Person-to-Person Transfer", "Savings / Tabung", "Tabung Withdrawal", "Investment / ASB"])))
     
-    data_cats = set(expense_df["Category"].unique()).union(set(savings_in_df["Category"].unique()))
+    data_cats = set(expense_df["Category"].unique())
     all_cats = sorted(list(set(all_known_cats).union(data_cats)))
     
     col_l, col_r = st.columns([1, 2])
@@ -1202,8 +1212,6 @@ with tab5:
         st.markdown("### Budget vs Actual (Selected Period)")
         
         actuals = expense_df.groupby("Category")["Amount"].sum().to_dict()
-        sav_actuals = savings_in_df.groupby("Category")["Amount"].sum().to_dict()
-        actuals.update(sav_actuals)
         
         budget_data = []
         for cat in all_cats:
@@ -1256,36 +1264,54 @@ with tab4:
         st.warning("Month/year metadata not found. Re-import statements to see this tab.")
         st.stop()
 
-    # Build per-month aggregates
-    inc_m  = (mdf[mdf["Type"] == "Income"]
+    # Build per-month aggregates. Internal Tabung transfers are netted
+    # separately; withdrawals are not counted as new income.
+    inc_m = (mdf[mdf["Type"] == "Income"]
+             .groupby(["year", "month"])["Amount"].sum()
+             .reset_index().rename(columns={"Amount": "Income"}))
+    reim_m = (mdf[mdf["Type"] == "Reimbursement"]
               .groupby(["year", "month"])["Amount"].sum()
-              .reset_index().rename(columns={"Amount": "Income"}))
-    exp_m  = (mdf[mdf["Type"] == "Expense"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby(["year", "month"])["Amount"].sum()
-              .reset_index().rename(columns={"Amount": "Expense"}))
-    sav_m  = (mdf[mdf["Category"] == "Savings / Tabung"].copy()
-              .assign(Amount=lambda x: x["Amount"].abs())
-              .groupby(["year", "month"])["Amount"].sum()
-              .reset_index().rename(columns={"Amount": "Savings"}))
+              .reset_index().rename(columns={"Amount": "Reimbursements"}))
+    exp_m = (mdf[mdf["Type"] == "Expense"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby(["year", "month"])["Amount"].sum()
+             .reset_index().rename(columns={"Amount": "Expense"}))
+    ext_in_m = (mdf[(mdf["Type"] == "External Transfer") & (mdf["Amount"] > 0)]
+                .groupby(["year", "month"])["Amount"].sum()
+                .reset_index().rename(columns={"Amount": "TransfersIn"}))
+    ext_out_m = (mdf[(mdf["Type"] == "External Transfer") & (mdf["Amount"] < 0)].copy()
+                 .assign(Amount=lambda x: x["Amount"].abs())
+                 .groupby(["year", "month"])["Amount"].sum()
+                 .reset_index().rename(columns={"Amount": "TransfersOut"}))
+    inv_m = (mdf[mdf["Type"] == "Investment"].copy()
+             .assign(Amount=lambda x: x["Amount"].abs())
+             .groupby(["year", "month"])["Amount"].sum()
+             .reset_index().rename(columns={"Amount": "Investments"}))
+    tabung_m = (mdf[mdf["Type"] == "Internal Transfer"]
+                .groupby(["year", "month"])["Amount"].sum()
+                .reset_index())
+    tabung_m["TabungNet"] = -tabung_m["Amount"]
+    tabung_m = tabung_m[["year", "month", "TabungNet"]]
 
-    monthly = (
-        inc_m
-        .merge(exp_m, on=["year", "month"], how="outer")
-        .merge(sav_m, on=["year", "month"], how="outer")
-        .fillna(0)
-        .sort_values(["year", "month"])
-    )
+    monthly = inc_m
+    for part in [reim_m, exp_m, ext_in_m, ext_out_m, inv_m, tabung_m]:
+        monthly = monthly.merge(part, on=["year", "month"], how="outer")
+    monthly = monthly.fillna(0).sort_values(["year", "month"])
     monthly["MonthLabel"] = monthly.apply(
         lambda r: f"{_cal.month_abbr[int(r['month'])]} {int(r['year'])}", axis=1
     )
-    monthly["Net"] = monthly["Income"] - monthly["Expense"]
+    # TabungNet is positive when more was deposited than withdrawn.
+    monthly["Savings"] = monthly["TabungNet"]
+    monthly["Net"] = (
+        monthly["Income"] + monthly["Reimbursements"] + monthly["TransfersIn"]
+        - monthly["Expense"] - monthly["TransfersOut"] - monthly["Investments"]
+    )
     monthly["SavingsRate"] = (
-        (monthly["Net"] + monthly["Savings"]) / monthly["Income"].replace(0, float("nan")) * 100
+        monthly["Net"] / monthly["Income"].replace(0, float("nan")) * 100
     ).fillna(0).round(1)
     monthly["Expense_Roll3"] = monthly["Expense"].rolling(3, min_periods=1).mean()
-    monthly["Expense_MoM"]   = monthly["Expense"].diff()
-    monthly["Expense_MoMPct"]= (monthly["Expense"].pct_change() * 100).round(1)
+    monthly["Expense_MoM"] = monthly["Expense"].diff()
+    monthly["Expense_MoMPct"] = (monthly["Expense"].pct_change() * 100).round(1)
 
     num_months = len(monthly)
 
