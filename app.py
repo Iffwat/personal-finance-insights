@@ -213,7 +213,7 @@ if mode == "Import New Statement" and uploaded_files:
                 os.remove(temp_path)
 
 # ── Load all data from DB ──────────────────────────────────────────────────────
-clean_df = load_transactions()
+clean_df = process_transactions(load_transactions())  # Reclassify historical rows with current rules
 
 if clean_df.empty:
     if mode == "Import New Statement":
@@ -338,34 +338,62 @@ if filtered < total_rows:
     )
 
 # ── Derived aggregates from filtered data ─────────────────────────────────────
-savings_in_df  = df[df["Category"] == "Savings / Tabung"].copy()
-savings_out_df = df[df["Category"] == "Tabung Withdrawal"].copy()
+# Future / Tabung deposits and withdrawals are movements between your own
+# accounts. They are shown separately and excluded from income and expenses.
+internal_df = df[df["Type"] == "Internal Transfer"].copy()
+savings_in_df = internal_df[
+    (internal_df["Category"] == "Savings / Tabung") & (internal_df["Amount"] < 0)
+].copy()
+savings_out_df = internal_df[
+    (internal_df["Category"] == "Tabung Withdrawal") & (internal_df["Amount"] > 0)
+].copy()
+income_df = df[df["Type"] == "Income"].copy()
+reimbursement_df = df[df["Type"] == "Reimbursement"].copy()
+expense_df = df[df["Type"] == "Expense"].copy()
+external_transfer_df = df[df["Type"] == "External Transfer"].copy()
+investment_df = df[df["Type"] == "Investment"].copy()
 
-income_df      = df[(df["Type"] == "Income") & (df["Category"] != "Tabung Withdrawal")]
-expense_df     = df[(df["Type"] == "Expense") & (df["Category"] != "Savings / Tabung")].copy()
-
-expense_df["Amount"]    = expense_df["Amount"].abs()
+expense_df["Amount"] = expense_df["Amount"].abs()
 savings_in_df["Amount"] = savings_in_df["Amount"].abs()
+savings_out_df["Amount"] = savings_out_df["Amount"].abs()
+investment_df["Amount"] = investment_df["Amount"].abs()
 
-total_income       = income_df["Amount"].sum()
-total_expenses     = expense_df["Amount"].sum()
-total_savings_in   = savings_in_df["Amount"].sum()
-total_savings_out  = savings_out_df["Amount"].sum()
+total_income = income_df["Amount"].clip(lower=0).sum()
+total_reimbursements = reimbursement_df["Amount"].clip(lower=0).sum()
+total_expenses = expense_df["Amount"].sum()
+total_external_transfer_in = external_transfer_df.loc[
+    external_transfer_df["Amount"] > 0, "Amount"
+].sum()
+total_external_transfer_out = external_transfer_df.loc[
+    external_transfer_df["Amount"] < 0, "Amount"
+].abs().sum()
+total_investments = investment_df["Amount"].sum()
+total_savings_in = savings_in_df["Amount"].sum()
+total_savings_out = savings_out_df["Amount"].sum()
+net_tabung_movement = total_savings_in - total_savings_out
 
-net_flow           = total_income - total_expenses
-savings_rate = (
-    (net_flow + total_savings_in) / total_income * 100
-    if total_income > 0 else 0.0
+# Change in the main account includes Tabung movements; overall surplus across
+# owned accounts excludes them. Both figures are useful, but neither treats a
+# Tabung withdrawal as new income.
+net_system_surplus = (
+    total_income + total_reimbursements + total_external_transfer_in
+    - total_expenses - total_external_transfer_out - total_investments
 )
+net_flow = net_system_surplus
+net_remaining = (
+    total_income + total_reimbursements + total_external_transfer_in
+    + total_savings_out - total_expenses - total_external_transfer_out
+    - total_investments - total_savings_in
+)
+savings_rate = (net_system_surplus / total_income * 100) if total_income > 0 else 0.0
 
 cat_summary = (
     expense_df.groupby("Category")["Amount"]
     .sum().reset_index()
     .sort_values("Amount", ascending=False)
 )
-top_cat     = cat_summary.iloc[0]["Category"] if not cat_summary.empty else "N/A"
-top_cat_amt = cat_summary.iloc[0]["Amount"]   if not cat_summary.empty else 0.0
-net_remaining = total_income - total_expenses - total_savings_in + total_savings_out
+top_cat = cat_summary.iloc[0]["Category"] if not cat_summary.empty else "N/A"
+top_cat_amt = cat_summary.iloc[0]["Amount"] if not cat_summary.empty else 0.0
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Cash Flow Map", "Weekly Analysis", "Monthly Trends", "Budgets & Targets"])
