@@ -69,3 +69,20 @@ Contributions, issues, and feature requests are welcome! Feel free to check the 
 
 ---
 *Built to make personal finance tracking a little less tedious and a lot more insightful.*
+
+
+## Accounting model
+
+The analyzer separates transaction direction from the financial meaning of a transaction:
+
+- **Income**: salary and other earned income.
+- **Reimbursements**: claim repayments are shown separately and are not treated as salary.
+- **Actual expenses**: purchases, bills and merchant payments.
+- **Internal transfers**: movements between accounts owned by the user. Transfers labelled `FUND Future` / `WTDRW Future` are recognised as deposits to and withdrawals from the Future (Tabung) holding account. These are excluded from income and expenses.
+- **Other own-account allocations**: own-name transfers with memos such as Toll, Insurance or Game are shown separately from purchases.
+- **Investments**: ASB/ASNB allocations are tracked separately from living expenses.
+- **External transfers**: unidentified person-to-person transfers are shown separately until the user can verify their purpose.
+
+The Cash Flow Map reconciles both the main-account movement and the overall surplus across owned accounts. Monthly and weekly views show net Future/Tabung movement (deposits less withdrawals), rather than treating every deposit as permanent savings. Historical transactions are reclassified with the current rules when loaded, so an existing local database does not need to be deleted or re-imported.
+
+Classification is rule-based. Unidentified transfers and ambiguous merchants should be reviewed before relying on category totals.
