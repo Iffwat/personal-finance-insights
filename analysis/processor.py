@@ -1,260 +1,61 @@
 import pandas as pd
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# CATEGORIZATION RULES
-#
-# Rules are evaluated in ORDER — the FIRST match wins.
-# Each rule is a dict with:
-#   "keywords"       : list of lowercase substrings; ANY match triggers rule
-#   "extra_require"  : (optional) list; at least ONE must ALSO be present
-#   "category"       : the category label to assign
-#   "type_override"  : (optional) overrides the Type determined by amount sign
-#
-# ---------------------------------------------------------------------------
-# HOW TABUNG / FUND TRANSFERS WORK (Maybank & typical MY statements):
-#
-#  When you SEND money TO your tabung (e.g. Tabung Haji, ASB, PRS):
-#    -> Amount is NEGATIVE in your bank statement (money leaves your account)
-#    -> Description contains: "fund", "tabung", "amanah", etc.
-#    -> Category : "Savings / Tabung"   |  Type override : "Savings Transfer"
-#
-#  When you WITHDRAW from your tabung back to your account:
-#    -> Amount is POSITIVE (money enters your account)
-#    -> Description contains: "wtdrw", "withdrawal", "pengeluaran" AND
-#       also "fund", "tabung", or "amanah"
-#    -> Category : "Tabung Withdrawal"  |  Type override : "Income"
-#
-#  EXAMPLE DESCRIPTIONS:
-#    "TRANSFER FROM A/C MUHAMMAD IRSYAD IFF* 00000001 FUND Future"
-#       -> matches "fund future" rule -> Savings / Tabung
-#
-#    "FUND TRANSFER TO A/ MUHAMMAD IRSYAD IFF* 00000001 WTDRW Future"
-#       -> matches "wtdrw" + "fund" -> Tabung Withdrawal / Income
-# ---------------------------------------------------------------------------
-
+# Ordered rules: merchant-specific rules are evaluated before generic bank
+# transfers because QR merchant payments may also be labelled "IBK FUND TFR".
 RULES = [
-    # == TABUNG / FUND (must be checked BEFORE generic transfer rules) ========
-    {
-        "keywords": ["wtdrw", "withdrawal", "pengeluaran"],
-        "extra_require": ["fund", "tabung", "amanah"],
-        "category": "Tabung Withdrawal",
-        "expected_sign": 1,
-    },
-    {
-        "keywords": ["fund future", "tabung future", "iff*"],
-        "category": "Savings / Tabung",
-        "expected_sign": -1,
-    },
-    {
-        "keywords": ["tabung haji"],
-        "category": "Tabung Haji",
-    },
-    {
-        "keywords": ["amanah saham", " asb ", "asnb", "kwsp", " epf ",
-                     "prs ", "public mutual", "manulife", "principal asset"],
-        "category": "Savings / Tabung",
-        "expected_sign": -1,
-    },
-
-    # == SALARY / INCOME ======================================================
-    {
-        "keywords": ["salary", "gaji", "payroll", "emolumen", "allowance", "elaun",
-                     "bonus", "dividen", "dividend", "hr payroll", "incentive"],
-        "category": "Salary / Income",
-        "expected_sign": 1,
-    },
-
-    # == INBOUND TRANSFERS (money received) ===================================
-    {
-        "keywords": ["transfer from", "transfer drpd", "penerimaan",
-                     "received from", "masuk dari", "credit from",
-                     "ibg cr", "duitnow cr", "interbank cr"],
-        "category": "Transfer In",
-        "expected_sign": 1,
-    },
-
-    # == OUTBOUND TRANSFERS ===================================================
-    {
-        "keywords": ["transfer to", "transfer ke", "hantar ke", "sent to",
-                     "ibg dr", "duitnow dr", "interbank dr"],
-        "category": "Bank Transfer Out",
-        "expected_sign": -1,
-    },
-
-    # == DUITNOW / ONLINE BANKING =============================================
-    {
-        "keywords": ["duitnow", "jompay", "fpx", "online payment", "online banking",
-                     "maybank2u", "m2u", "cimb clicks", "rhb now"],
-        "category": "Online Payment",
-    },
-
-    # == LOAN / FINANCING =====================================================
-    {
-        "keywords": ["loan", "pinjaman", "mortgage", "rumah", "pembiayaan",
-                     "hire purchase", "car loan", "kereta", "auto finance",
-                     "housing loan", "mrta", "mlta"],
-        "category": "Loan / Financing",
-    },
-
-    # == UTILITIES & BILLS ====================================================
-    {
-        "keywords": ["tnb ", "tenaga nasional", "syabas", "indah water", "air selangor",
-                     "telekom", "unifi", "maxis", "celcom", "digi", "yes 4g",
-                     "u mobile", "astro", "streamyx", "utility", "bil bayaran",
-                     "bill payment", "sewerage"],
-        "category": "Utilities & Bills",
-    },
-
-    # == INSURANCE / TAKAFUL ==================================================
-    {
-        "keywords": ["insurans", "insurance", "takaful", "great eastern", "allianz",
-                     "prudential", "aia ", "etiqa", "zurich", "tokio marine"],
-        "category": "Insurance / Takaful",
-    },
-
-    # == GOVERNMENT / TAX =====================================================
-    {
-        "keywords": ["lhdn", "hasil", "cukai", "zakat", "tax", "income tax",
-                     "jpj", "road tax", "sst", "gst", "perkeso", "socso", "eis "],
-        "category": "Tax & Government",
-    },
-
-    # == TRANSPORT ============================================================
-    {
-        "keywords": ["grab", "myrapid", "rapidkl", " lrt ", " mrt ", " ktm ",
-                     "touch n go", " tng ", "e-wallet top", "petronas", "shell",
-                     "petron", "caltex", "bpcm", "plus highway", "lebuhraya",
-                     "parking", "uber", "lyft", " bas ", "transit", "grab car",
-                     "maxim", "indriver", "hailo"],
-        "category": "Transport",
-    },
-
-    # == FOOD & DINING ========================================================
-    {
-        "keywords": ["foodpanda", "grabfood", "grab food", "shopeefood",
-                     "mcdonalds", "mcd ", "kfc", "pizza hut", "domino",
-                     "tealive", "chatime", "zus coffee", "starbucks", "oldtown",
-                     "secret recipe", "nandos", "marrybrown", "burger king",
-                     "subway", "wendys", "restaurant", "restoran", "kedai makan",
-                     "mamak", "cafe", "coffee", "bakery", "doordash",
-                     "makan", "nasi lemak", "roti canai"],
-        "category": "Food & Dining",
-    },
-
-    # == GROCERIES ============================================================
-    {
-        "keywords": ["mydin", "giant", "tesco", "aeon", "jaya grocer",
-                     "99 speedmart", "99speedmart", "lotus", "cold storage",
-                     "econsave", "village grocer", "walmart", "costco",
-                     "supermarket", "pasar raya", "groceries", "pasaraya"],
-        "category": "Groceries",
-    },
-
-    # == SHOPPING / E-COMMERCE ================================================
-    {
-        "keywords": ["shopee", "lazada", "zalora", "amazon", "taobao", "alibaba",
-                     "h&m", "uniqlo", "parkson", "isetan", "sogo", "bonia",
-                     "padini", "cotton on", "online shopping", "e-commerce",
-                     "vivo ", "app store", "google play"],
-        "category": "Shopping",
-    },
-
-    # == HEALTH & MEDICAL =====================================================
-    {
-        "keywords": ["hospital", "klinik", "clinic", "farmasi", "pharmacy",
-                     "guardian", "watsons", "dental", "doktor", "doctor",
-                     "ubat", "medicine", "medical", "optik", "optical"],
-        "category": "Health & Medical",
-    },
-
-    # == EDUCATION ============================================================
-    {
-        "keywords": ["yuran", "fees", "tuition", "university", "kolej", "college",
-                     "sekolah", "school", "ptptn", "scholarship", "bursary",
-                     "pendidikan", "education"],
-        "category": "Education",
-    },
-
-    # == ENTERTAINMENT & SUBSCRIPTIONS ========================================
-    {
-        "keywords": ["netflix", "spotify", "youtube", "disney", "hbo", "viu",
-                     "iflix", "tonton", "apple music", "amazon prime",
-                     "steam", "subscript", "membership"],
-        "category": "Entertainment & Subscriptions",
-    },
-
-    # == ATM / CASH WITHDRAWAL ================================================
-    {
-        "keywords": ["atm withdrawal", "cash withdrawal", "pengeluaran tunai", "cdm"],
-        "category": "Cash Withdrawal",
-        "type_override": "Expense",
-    },
+    {"keywords": ["wtdrw future", "wtdrw tabung"], "category": "Tabung Withdrawal", "type_override": "Internal Transfer"},
+    {"keywords": ["fund future", "tabung future"], "category": "Savings / Tabung", "type_override": "Internal Transfer"},
+    {"keywords": ["amanah saham", "asnb transfer", "asb transfer"], "category": "Investment / ASB", "type_override": "Investment"},
+    {"keywords": ["salary", "gaji", "payroll", "emolumen", "allowance", "elaun", "bonus", "dividen", "dividend", "incentive"], "category": "Salary / Income", "type_override": "Income"},
+    {"keywords": ["claim"], "category": "Expense Reimbursement", "type_override": "Reimbursement"},
+    {"keywords": ["spotify", "apple.com/bill", "openai", "chatgpt", "netflix", "youtube", "disney", "hbo", "viu", "steam"], "category": "Subscriptions & Digital Services"},
+    {"keywords": ["petronas", "shell", "petron", "caltex", "setel fuel"], "category": "Fuel"},
+    {"keywords": ["plus-", "plus highway", "lebuhraya", "toll", "ldp", "kesas", "elite"], "category": "Toll & Parking"},
+    {"keywords": ["grab-", "grab car", "myrapid", "rapidkl", "lrt", "mrt", "ktm", "parking", "maxim", "indriver"], "category": "Transport"},
+    {"keywords": ["zus coffee", "foodpanda", "grabfood", "grab food", "mcdonald", "kfc", "pizza hut", "domino", "tealive", "starbucks", "restaurant", "restoran", "kedai makan", "mamak", "cafe", "coffee", "bakery", "ayam gepuk", "warong", "breakfast station", "food empire"], "category": "Food & Dining"},
+    {"keywords": ["mydin", "giant", "tesco", "aeon", "jaya grocer", "99 speedmart", "lotus", "cold storage", "econsave", "village grocer", "supermarket", "pasar raya"], "category": "Groceries"},
+    {"keywords": ["7-eleven", "7 eleven", "kk mart", "mynews", "99-mynews", "my news"], "category": "Convenience Stores"},
+    {"keywords": ["shopee", "lazada", "zalora", "amazon", "taobao", "h&m", "uniqlo", "parkson", "sogo", "padini", "mr diy"], "category": "Shopping"},
+    {"keywords": ["insurans", "insurance", "takaful", "great eastern", "allianz", "prudential", "aia ", "etiqa", "zurich"], "category": "Insurance / Takaful"},
+    {"keywords": ["tnb", "tenaga nasional", "syabas", "indah water", "unifi", "maxis", "celcom", "digi", "astro", "utility", "bill payment"], "category": "Utilities & Bills"},
+    {"keywords": ["barber", "salon"], "category": "Personal Care"},
+    {"keywords": ["duit keta", "axia"], "category": "Vehicle Commitment"},
+    {"keywords": ["duit berkat", "family"], "category": "Family Support"},
+    {"keywords": ["atm withdrawal", "cash withdrawal", "pengeluaran tunai", "cdm"], "category": "Cash Withdrawal"},
+    # Only generic/unidentified transfers reach this rule. Known merchant QR
+    # payments have already been classified above.
+    {"keywords": ["transfer to", "transfer from", "transfer drpd", "ibk fund tfr", "duitnow qr", "mae qr", "fund transfer"], "category": "Person-to-Person Transfer", "type_override": "External Transfer"},
 ]
 
-
 def categorize_transaction(description: str, amount: float = 0.0):
-    """
-    Returns (category: str, type_override: str | None).
-    type_override, if set, will replace the sign-based Type assignment.
-    """
-    if not description:
-        return "Other", None
-
-    desc_lower = str(description).lower().strip()
-
+    """Return (category, type override); internal transfers are not income/expense."""
+    desc = str(description or "").lower().strip()
     for rule in RULES:
-        keywords = rule.get("keywords", [])
-        extra    = rule.get("extra_require", [])
-
-        if not any(kw in desc_lower for kw in keywords):
-            continue
-
-        if extra and not any(ex in desc_lower for ex in extra):
-            continue
-
-        expected_sign = rule.get("expected_sign", 0)
-        if expected_sign == 1 and amount < 0:
-            continue
-        if expected_sign == -1 and amount > 0:
-            continue
-
-        return rule["category"]
-
-    return "Other"
-
+        if any(keyword in desc for keyword in rule["keywords"]):
+            return rule["category"], rule.get("type_override")
+    return "Other", None
 
 def process_transactions(df: pd.DataFrame) -> pd.DataFrame:
-    clean_df = df.copy()
+    clean = df.copy()
 
-    # 1. Parse amounts (handles RM, $, comma-separated, bracketed negatives)
-    def parse_amount(val):
-        if pd.isna(val) or val is None:
+    def parse_amount(value):
+        if pd.isna(value) or value is None:
             return 0.0
-        val_str = (str(val)
-                   .replace("$", "")
-                   .replace("RM", "")
-                   .replace(",", "")
-                   .strip())
-        if val_str.startswith("(") and val_str.endswith(")"):
-            val_str = "-" + val_str[1:-1]
+        text = str(value).replace("$", "").replace("RM", "").replace(",", "").strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = "-" + text[1:-1]
         try:
-            return float(val_str)
-        except ValueError:
+            return float(text)
+        except (TypeError, ValueError):
             return 0.0
 
-    clean_df["Amount"] = clean_df["Amount"].apply(parse_amount)
-
-    # 2. Base Type from amount sign
-    clean_df["Type"] = np.where(clean_df["Amount"] >= 0, "Income", "Expense")
-
-    # 3. Apply categorization
-    def apply_categorization(row):
-        cat = categorize_transaction(
-            row.get("Description", ""), row.get("Amount", 0.0)
-        )
-        return cat
-
-    clean_df["Category"] = clean_df.apply(apply_categorization, axis=1)
-
-    return clean_df
+    clean["Amount"] = clean["Amount"].apply(parse_amount)
+    categories, types = [], []
+    for _, row in clean.iterrows():
+        category, override = categorize_transaction(row.get("Description", ""), row["Amount"])
+        categories.append(category)
+        types.append(override or ("Income" if row["Amount"] >= 0 else "Expense"))
+    clean["Category"] = categories
+    clean["Type"] = types
+    return clean
