@@ -1605,7 +1605,7 @@ with tab4:
         "Net Tabung Movement (RM)", "Other Own-Account Movement (RM)", "Overall Surplus (RM)"
     ]:
         display_monthly[col] = display_monthly[col].map(lambda v: f"RM {v:,.2f}")
-    display_monthly["Personal Savings Rate (%)"] = display_monthly["Savings Rate (%)"].map(
+    display_monthly["Personal Savings Rate (%)"] = display_monthly["Personal Savings Rate (%)"].map(
         lambda v: f"{v:.1f}%"
     )
     st.dataframe(display_monthly.set_index("Month"), use_container_width=True)
